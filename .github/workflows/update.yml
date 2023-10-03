@@ -1,0 +1,57 @@
+
+name: "pypi dependency crawler"
+
+on:
+  push:
+    branches: [ "ci*" ]
+  schedule:
+    - cron:  "13 7,19 * * *"
+  workflow_dispatch:
+
+jobs:
+
+  update-sdist-deps:
+    name: Update sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 1
+
+    - name: Install/Setup - NIX
+      uses: cachix/install-nix-action@v18
+      with:
+        nix_path: nixpkgs=https://github.com/NixOS/nixpkgs/archive/8ad5e8132c5dcf977e308e7bf5517cc6cc0bf7d8.tar.gz # nix 2.13.3
+        # GC 30GB when free space < 3GB
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+          min-free = 3000000000
+          max-free = 30000000000
+
+    # we crawl 4 times per day and split the data in 2 chunks, so we update all data twice a day
+    - name: update sdist/wheel deps
+      run: |
+        set -x
+        git config --local user.email "${{ github.actor }}@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+
+        # create temporary directory for downloads
+        export TMP_DIR=./tmplocal
+        mkdir $TMP_DIR
+
+        # despite the temporary dir residing on disk,
+        # the number of workers somehow still significantly affects RAM usage.
+        # TODO: fix it
+        export WORKERS=5
+
+        # make sure that githubs time limit of 6h is not exceeded
+        export MAX_MINUTES_WHEEL=30
+        export MAX_MINUTES_SDIST=300
+
+        # avoid writing an updated lock file because this job's correct
+        # operation depends on the exact revisions in the committed lock file.
+        nix run --no-write-lock-file -L .#job-sdist-wheel
+        git push
+
+      shell: bash
